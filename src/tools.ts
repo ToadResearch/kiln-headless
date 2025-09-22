@@ -28,7 +28,18 @@ export async function searchTerminology(
   systems?: string[],
   limit: number = 200
 ): Promise<TerminologySearchResult> {
-  const TERMINOLOGY_SERVER = getTerminologyServerURL();
+  const TERMINOLOGY_SERVER = (getTerminologyServerURL() || '').trim();
+
+  if (!TERMINOLOGY_SERVER) {
+    const queries = Array.isArray(query) ? query : [query];
+    return {
+      hits: [],
+      count: 0,
+      fullSystem: false,
+      perQuery: queries.map((q) => ({ query: q, count: 0 })),
+      perQueryHits: queries.map((q) => ({ query: q, hits: [], count: 0 })),
+    };
+  }
 
   const queries = Array.isArray(query) ? query : [query];
   const body = JSON.stringify({ queries, systems, limit });

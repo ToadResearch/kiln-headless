@@ -34,7 +34,7 @@ export interface Step {
 // Document Types & Inputs
 // =============================
 
-export type DocumentType = 'narrative' | 'fhir';
+export type DocumentType = 'narrative' | 'fhir' | 'note_and_fhir';
 
 export interface NarrativeInputs {
   sketch: string;
@@ -168,7 +168,7 @@ export interface DocumentTypeDef<T extends InputsUnion> {
 }
 
 // Simple document type registry interface
-export type RegisteredType = 'narrative' | 'fhir';
+export type RegisteredType = 'narrative' | 'fhir' | 'note_and_fhir';
 export type AnyDef = DocumentTypeDef<InputsUnion>;
 export interface DocumentTypeRegistry {
   register: <T extends InputsUnion>(type: RegisteredType, def: DocumentTypeDef<T>) => void;

@@ -22,8 +22,72 @@ export interface Config {
   basePath: string;
 }
 
-let resolvedConfig: Config | null = null;
-let initPromise: Promise<void> | null = null;
+const isHeadlessEnv =
+  (typeof globalThis !== 'undefined' && (globalThis as any).KILN_HEADLESS === true) ||
+  typeof window === 'undefined' ||
+  typeof document === 'undefined';
+
+function readEnv(key: string): string | undefined {
+  try {
+    return typeof process !== 'undefined' ? process.env?.[key] ?? undefined : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function numberFromEnv(key: string, fallback: number): number {
+  const raw = readEnv(key);
+  if (raw == null) return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function boolFromEnv(key: string, fallback: boolean): boolean {
+  const raw = readEnv(key);
+  if (raw == null) return fallback;
+  return /^(1|true|yes|on)$/i.test(raw.trim());
+}
+
+function makeHeadlessConfig(): Config {
+  const baseURL = readEnv('KILN_BASE_URL') || readEnv('PUBLIC_KILN_LLM_URL') || 'https://api.openai.com/v1';
+  const model = readEnv('KILN_MODEL') || readEnv('PUBLIC_KILN_MODEL') || 'gpt-4o-mini';
+  const publicTemperature = numberFromEnv('PUBLIC_KILN_TEMPERATURE', 0.2);
+  const temperature = numberFromEnv('KILN_TEMPERATURE', publicTemperature);
+  const apiKey = readEnv('KILN_API_KEY') || '';
+  const fhirBaseURL = readEnv('KILN_FHIR_BASE_URL') || readEnv('PUBLIC_KILN_FHIR_BASE_URL') || '';
+  const validationServicesURL =
+    readEnv('KILN_VALIDATION_URL') || readEnv('PUBLIC_KILN_VALIDATION_SERVICES_URL') || '';
+  const publicFhirConcurrency = numberFromEnv('PUBLIC_KILN_FHIR_GEN_CONCURRENCY', 1);
+  const fhirGenConcurrency = Math.max(1, numberFromEnv('KILN_FHIR_CONCURRENCY', publicFhirConcurrency));
+  const publicMaxRetries = numberFromEnv('PUBLIC_KILN_MAX_RETRIES', 3);
+  const maxRetries = Math.max(1, numberFromEnv('KILN_MAX_RETRIES', publicMaxRetries));
+  const publicLlmConcurrency = numberFromEnv('PUBLIC_KILN_LLM_MAX_CONCURRENCY', 4);
+  const llmMaxConcurrency = Math.max(1, numberFromEnv('KILN_LLM_MAX_CONCURRENCY', publicLlmConcurrency));
+  const debugMode = boolFromEnv('KILN_DEBUG', boolFromEnv('PUBLIC_KILN_DEBUG_MODE', false));
+  const environment = readEnv('NODE_ENV') || 'cli';
+  const basePath = readEnv('KILN_BASE_PATH') || readEnv('PUBLIC_KILN_BASE_PATH') || '/';
+  return {
+    baseURL,
+    model,
+    temperature,
+    apiKeyHint: apiKey ? 'embedded' : 'not-configured',
+    publicApiKey: apiKey || null,
+    fhirBaseURL,
+    validationServicesURL,
+    fhirGenConcurrency,
+    debugMode,
+    maxRetries,
+    llmMaxConcurrency,
+    generatedAt: new Date().toISOString(),
+    version: 'headless',
+    source: 'runtime',
+    environment,
+    basePath,
+  };
+}
+
+let resolvedConfig: Config | null = isHeadlessEnv ? makeHeadlessConfig() : null;
+let initPromise: Promise<void> | null = isHeadlessEnv ? Promise.resolve() : null;
 
 export const config = {
   async init(): Promise<void> {

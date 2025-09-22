@@ -1,11 +1,25 @@
 import type { Targets, Prompts } from './types';
 
 export function getTargets(): Targets {
+  const hasLocalStorage = typeof localStorage !== 'undefined';
+  const read = (key: string): string | null => {
+    if (!hasLocalStorage) return null;
+    try {
+      return localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  };
+  const parse = (value: string | null, fallback: number): number => {
+    if (value == null) return fallback;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  };
   return {
-    SECTION: Number(localStorage.getItem('SECTION_TARGET') ?? 0.75),
-    NOTE: Number(localStorage.getItem('NOTE_TARGET') ?? 0.78),
-    SECTION_MAX_REVS: Number(localStorage.getItem('SECTION_MAX_REVISIONS') ?? 3),
-    NOTE_MAX_REVS: Number(localStorage.getItem('NOTE_MAX_REVISIONS') ?? 3),
+    SECTION: parse(read('SECTION_TARGET'), 0.75),
+    NOTE: parse(read('NOTE_TARGET'), 0.78),
+    SECTION_MAX_REVS: parse(read('SECTION_MAX_REVISIONS'), 3),
+    NOTE_MAX_REVS: parse(read('NOTE_MAX_REVISIONS'), 3),
   };
 }
 

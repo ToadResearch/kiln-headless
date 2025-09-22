@@ -16,6 +16,7 @@
     "serve:static": "npx serve dist -l 3001 --cors --single",
     "config:check": "bun run scripts/validate-env.ts",
     "config:dump": "node -e \"import('./dist/config.json').then(m=>console.log(JSON.stringify(m, null, 2)))\"",
+    "headless": "bun run src/cli/headless.ts",
     "clean": "rm -rf dist node_modules/.cache bun.lockb",
     "format": "prettier --write \"**/*.{js,ts,jsx,tsx,json,md,yml,yaml}\"",
     "format:check": "prettier --check \"**/*.{js,ts,jsx,tsx,json,md,yml,yaml}\"",

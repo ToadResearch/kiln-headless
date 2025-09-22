@@ -1,5 +1,6 @@
 import { spawn } from 'child_process';
 import { join } from 'path';
+import { existsSync } from 'fs';
 import type { ChildProcess } from 'child_process';
 
 export class TestServer {
@@ -10,11 +11,22 @@ export class TestServer {
     return new Promise((resolve, reject) => {
       const serverPath = join(import.meta.dir, '..', '..', 'src', 'server.ts');
       // Start server on port 0 (random available port)
+      const defaultDbPath = join(process.cwd(), 'server', 'db', 'terminology.sqlite');
+      const terminologyDbPath = process.env.TERMINOLOGY_DB_PATH || defaultDbPath;
+      if (!existsSync(terminologyDbPath)) {
+        reject(new Error(`Terminology database not found at ${terminologyDbPath}`));
+        return;
+      }
+
+      const defaultValidatorJar = join(process.cwd(), 'server', 'validator.jar');
+      const validatorJar = process.env.VALIDATOR_JAR || defaultValidatorJar;
+
       this.process = spawn('bun', ['run', serverPath], {
         env: {
           ...process.env,
           PORT: '0', // Let OS assign a random available port
-          TERMINOLOGY_DB_PATH: './db/terminology.sqlite',
+          TERMINOLOGY_DB_PATH: terminologyDbPath,
+          VALIDATOR_JAR: validatorJar,
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       });

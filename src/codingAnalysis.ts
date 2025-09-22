@@ -80,7 +80,16 @@ export async function batchExists(
     normalizedSystem?: string;
   }>
 > {
-  const base = getTerminologyServerURL();
+  const rawBase = (getTerminologyServerURL() || '').trim();
+  if (!rawBase) {
+    return items.map((item) => ({
+      system: item.system,
+      code: item.code,
+      exists: false,
+      normalizedSystem: item.system,
+    }));
+  }
+  const base = rawBase.replace(/\/$/, '');
   const doFetch = async () => {
     const res = await fetch(`${base}/tx/codes/exists`, {
       method: 'POST',

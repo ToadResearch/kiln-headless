@@ -9,6 +9,68 @@ Key points:
 
 Built by Josh Mandel, MD.
 
+
+---
+
+## Headless quick start:
+
+Install project dependencies
+```sh
+git clone <repo-url> kiln
+cd kiln
+bun install
+```
+
+Create the .env file and add your LLM api key to `KILN_API_KEY`
+```sh
+cp .env.example .env
+```
+
+Setup the server
+```sh
+cd server
+bun run scripts/setup.ts
+```
+
+Download terminology files
+```sh
+bun add fast-xml-parser
+bun run scripts/load-terminology.ts
+```
+
+Make sure everything works
+```sh
+bun test
+```
+
+```sh
+bun run headless --single \
+  --text "Mr. Grok Four is 42 years old and has the flu" \
+  --type fhir \
+  --llm-url https://openrouter.ai/api/v1 \
+  --model x-ai/grok-4-fast:free
+```
+  The CLI writes to `./kiln-data` (change with `--output` or `KILN_DATA_DIR`). Each job lives under `kiln-data/jobs/<jobId>/` with `metadata.json` plus per-phase folders (`planning/`, `sections/`, `assembly/`, `note_review/`, `finalized/`, `fhir/`, `terminology/`, and `other/`). Artifacts are flushed to disk as soon as their steps complete so large intermediates never accumulate in memory. Batch runs (`--batch --file narratives.txt`) create `kiln-data/batches/<batchId>/jobs/<jobId>/…` alongside consolidated batch metadata. Override LLM and validation settings at runtime without editing env files.
+
+  | Flag | Description | Default |
+  | --- | --- | --- |
+  | `--single` / `--batch` | Process one narrative or a batch file (`---` separators) | `--single` |
+  | `--type` | Document type (`narrative`, `fhir`, or `note_and_fhir`) | `fhir` |
+  | `--text` | Narrative text (prompts interactively if omitted) | none |
+  | `--file` | Batch input file path | none |
+  | `--output`, `-o` | Data root containing job/batch folders | `$KILN_DATA_DIR` or `./kiln-data` |
+  | `--llm-url` | Overrides `PUBLIC_KILN_LLM_URL` / `KILN_BASE_URL` | env config |
+  | `--model` | Overrides `PUBLIC_KILN_MODEL` / `KILN_MODEL` | env config |
+  | `--temperature` | Overrides `PUBLIC_KILN_TEMPERATURE` / `KILN_TEMPERATURE` | env config |
+  | `--fhir-concurrency` | Overrides `PUBLIC_KILN_FHIR_GEN_CONCURRENCY` / `KILN_FHIR_CONCURRENCY` | env config (default 1) |
+  | `--llm-max-concurrency` | Overrides `PUBLIC_KILN_LLM_MAX_CONCURRENCY` / `KILN_LLM_MAX_CONCURRENCY` | env config (default 4) |
+  | `--final-only` | Skip saving intermediate artifacts | intermediate saved |
+  | `--help` | Print usage | — |
+
+  Progress updates stream to the terminal as each step starts, with per-phase counts (Planning, Sections, Assembly, Note Review, Finalized, FHIR, Terminology) and a running LLM token tally. Use `--type note_and_fhir` to generate a narrative and immediately convert the finalized ReleaseCandidate into FHIR in a single run:
+
+---
+
 ## 1. Architecture
 
 Kiln's architecture separates concerns into a modular client-server model, enabling flexible deployment from fully static (browser-only) to full-stack with server-side validation. The system emphasizes stateless processing: the client handles interactive authoring and LLM calls, while the server provides on-demand validation services. This design supports rapid prototyping and scales to production without requiring a persistent database for user data.
@@ -90,6 +152,7 @@ No Node.js or other runtimes are needed—Bun handles everything.
 
 3. **Load Terminology Database**:
    ```
+   bun add fast-xml-parser
    bun run scripts/load-terminology.ts
    ```
    This imports the large vocabulary files into an optimized SQLite database (`server/db/terminology.sqlite`, ~1-2GB). The process may take 5-10 minutes on first run as it processes NDJSON files. It's a one-time setup—future runs reuse the database.
@@ -230,6 +293,37 @@ For local development, use Bun's built-in hot reload to iterate quickly. The ser
   bun run dev
   ```
   This runs the server on http://localhost:3500 without the UI. Use it for headless testing or integration with external clients. Access the UI separately by serving the built static files (e.g., `npx serve . -l 3000 --cors` from the root) and pointing it to the API at http://localhost:3500. Useful for API-focused development or when running the UI on a different port.
+- **Headless CLI**:
+  ```
+  bun run headless --single --type fhir --text "Clinical narrative here" \
+    --llm-url https://openrouter.ai/api/v1 \
+    --temperature 0.4 \
+    --fhir-concurrency 2
+  ```
+  The CLI writes to `./kiln-data` (change with `--output` or `KILN_DATA_DIR`). Each job lives under `kiln-data/jobs/<jobId>/` with `metadata.json` plus per-phase folders (`planning/`, `sections/`, `assembly/`, `note_review/`, `finalized/`, `fhir/`, `terminology/`, and `other/`). Artifacts are flushed to disk as soon as their steps complete so large intermediates never accumulate in memory. Batch runs (`--batch --file narratives.txt`) create `kiln-data/batches/<batchId>/jobs/<jobId>/…` alongside consolidated batch metadata. Override LLM and validation settings at runtime without editing env files.
+
+  | Flag | Description | Default |
+  | --- | --- | --- |
+  | `--single` / `--batch` | Process one narrative or a batch file (`---` separators) | `--single` |
+  | `--type` | Document type (`narrative`, `fhir`, or `note_and_fhir`) | `fhir` |
+  | `--text` | Narrative text (prompts interactively if omitted) | none |
+  | `--file` | Batch input file path | none |
+  | `--output`, `-o` | Data root containing job/batch folders | `$KILN_DATA_DIR` or `./kiln-data` |
+  | `--llm-url` | Overrides `PUBLIC_KILN_LLM_URL` / `KILN_BASE_URL` | env config |
+  | `--model` | Overrides `PUBLIC_KILN_MODEL` / `KILN_MODEL` | env config |
+  | `--temperature` | Overrides `PUBLIC_KILN_TEMPERATURE` / `KILN_TEMPERATURE` | env config |
+  | `--fhir-concurrency` | Overrides `PUBLIC_KILN_FHIR_GEN_CONCURRENCY` / `KILN_FHIR_CONCURRENCY` | env config (default 1) |
+  | `--llm-max-concurrency` | Overrides `PUBLIC_KILN_LLM_MAX_CONCURRENCY` / `KILN_LLM_MAX_CONCURRENCY` | env config (default 4) |
+  | `--final-only` | Skip saving intermediate artifacts | intermediate saved |
+  | `--help` | Print usage | — |
+
+  Progress updates stream to the terminal as each step starts, with per-phase counts (Planning, Sections, Assembly, Note Review, Finalized, FHIR, Terminology) and a running LLM token tally. Use `--type note_and_fhir` to generate a narrative and immediately convert the finalized ReleaseCandidate into FHIR in a single run:
+
+  ```
+  bun run headless --single --type note_and_fhir \
+    --text "56-year-old with sore throat named Mr. Example" \
+    --llm-url https://openrouter.ai/api/v1
+  ```
 
 In development, the server logs to the console (set `PUBLIC_KILN_DEBUG_MODE=true` for verbose output). Client config (e.g., API keys) is set in-browser via localStorage—changes persist across reloads but clear in incognito/private mode.
 
@@ -741,4 +835,3 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 ### Disclaimer
 
 This software is provided for research and educational purposes only. It is not intended for clinical decision-making, patient care, or any production use in healthcare settings. The author, contributors, and distributors make no representations or warranties regarding the accuracy, reliability, or suitability of the software for any purpose, including medical or clinical applications. Users assume all risks associated with its use. Always validate outputs against official standards and consult qualified healthcare professionals for clinical decisions.
-

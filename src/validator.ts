@@ -16,7 +16,11 @@ export interface ValidationResult {
 // Strict client: expect normalized shape from unified server
 export async function validateResource(resource: any, ctx?: Context): Promise<ValidationResult> {
   const doValidate = async (): Promise<ValidationResult> => {
-    const base = getFhirValidatorBaseURL().replace(/\/$/, '');
+    const baseRaw = (getFhirValidatorBaseURL() || '').trim();
+    if (!baseRaw) {
+      return { valid: true, issues: [] };
+    }
+    const base = baseRaw.replace(/\/$/, '');
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 15000);
     try {
