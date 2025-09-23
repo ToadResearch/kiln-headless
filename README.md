@@ -46,9 +46,11 @@ bun test
 ```sh
 bun run headless --single \
   --text "Mr. Grok Four is 42 years old and has the flu" \
-  --type fhir \
+  --type note_and_fhir \
   --llm-url https://openrouter.ai/api/v1 \
-  --model x-ai/grok-4-fast:free
+  --model x-ai/grok-4-fast:free \
+  --val-max-iters 30
+
 ```
   The CLI writes to `./kiln-data` (change with `--output` or `KILN_DATA_DIR`). Each job lives under `kiln-data/jobs/<jobId>/` with `metadata.json` plus per-phase folders (`planning/`, `sections/`, `assembly/`, `note_review/`, `finalized/`, `fhir/`, `terminology/`, and `other/`). Artifacts are flushed to disk as soon as their steps complete so large intermediates never accumulate in memory. Batch runs (`--batch --file narratives.txt`) create `kiln-data/batches/<batchId>/jobs/<jobId>/…` alongside consolidated batch metadata. Override LLM and validation settings at runtime without editing env files.
 
@@ -64,6 +66,7 @@ bun run headless --single \
   | `--temperature` | Overrides `PUBLIC_KILN_TEMPERATURE` / `KILN_TEMPERATURE` | env config |
   | `--fhir-concurrency` | Overrides `PUBLIC_KILN_FHIR_GEN_CONCURRENCY` / `KILN_FHIR_CONCURRENCY` | env config (default 1) |
   | `--llm-max-concurrency` | Overrides `PUBLIC_KILN_LLM_MAX_CONCURRENCY` / `KILN_LLM_MAX_CONCURRENCY` | env config (default 4) |
+  | `--val-max-iters` | Override per-resource FHIR refinement budget (`FHIR_VALIDATION_MAX_ITERS`) | 12 |
   | `--final-only` | Skip saving intermediate artifacts | intermediate saved |
   | `--help` | Print usage | — |
 
@@ -314,6 +317,7 @@ For local development, use Bun's built-in hot reload to iterate quickly. The ser
   | `--temperature` | Overrides `PUBLIC_KILN_TEMPERATURE` / `KILN_TEMPERATURE` | env config |
   | `--fhir-concurrency` | Overrides `PUBLIC_KILN_FHIR_GEN_CONCURRENCY` / `KILN_FHIR_CONCURRENCY` | env config (default 1) |
   | `--llm-max-concurrency` | Overrides `PUBLIC_KILN_LLM_MAX_CONCURRENCY` / `KILN_LLM_MAX_CONCURRENCY` | env config (default 4) |
+  | `--val-max-iters` | Override per-resource FHIR refinement budget (`FHIR_VALIDATION_MAX_ITERS`) | 12 |
   | `--final-only` | Skip saving intermediate artifacts | intermediate saved |
   | `--help` | Print usage | — |
 

@@ -26,12 +26,26 @@ export class ValidatorService {
   private validatorJar: string;
   private javaHeap: string;
   private serverPort: number = 8080;
+  private silent: boolean;
 
-  constructor(validatorJar: string, javaHeap: string = '4g') {
+  constructor(validatorJar: string, javaHeap: string = '4g', options: { silent?: boolean } = {}) {
     this.validatorJar = validatorJar;
     this.javaHeap = javaHeap;
+    this.silent = options.silent === true;
     // Use a random port to avoid conflicts
     this.serverPort = 8080 + Math.floor(Math.random() * 1000);
+  }
+
+  private log(...args: any[]): void {
+    if (!this.silent) console.log(...args);
+  }
+
+  private warn(...args: any[]): void {
+    if (!this.silent) console.warn(...args);
+  }
+
+  private error(...args: any[]): void {
+    if (!this.silent) console.error(...args);
   }
 
   async start() {
@@ -42,7 +56,7 @@ export class ValidatorService {
   }
 
   private async _doStart() {
-    console.log(`Starting FHIR validator server on port ${this.serverPort}...`);
+    this.log(`Starting FHIR validator server on port ${this.serverPort}...`);
     // Target the documented CLI for this validator build: `-server <port> -version 4.0 -tx n/a`
     const args = [
       `-Xmx${this.javaHeap}`,
@@ -56,7 +70,7 @@ export class ValidatorService {
       'n/a',
     ];
     try {
-      console.log('[Validator]', 'spawn', 'java', args.join(' '));
+      this.log('[Validator]', 'spawn', 'java', args.join(' '));
     } catch {}
     this.validatorProcess = spawn('java', args, { stdio: ['pipe', 'pipe', 'pipe'] });
 
@@ -78,7 +92,7 @@ export class ValidatorService {
       }, timeoutMs);
       this.validatorProcess!.stdout?.on('data', (b: Buffer) => {
         const t = b.toString();
-        console.log('[Validator]', t.trim());
+        if (!this.silent) console.log('[Validator]', t.trim());
         if (
           t.includes(`Listening on port ${this.serverPort}`) ||
           t.toLowerCase().includes('server started') ||
@@ -88,7 +102,7 @@ export class ValidatorService {
       });
       this.validatorProcess!.stderr?.on('data', (b: Buffer) => {
         const t = b.toString();
-        console.error('[Validator Error]', t.trim());
+        if (!this.silent) console.error('[Validator Error]', t.trim());
         if (t.includes(`Listening on port ${this.serverPort}`)) markReady();
       });
       const poller = setInterval(async () => {
@@ -103,13 +117,13 @@ export class ValidatorService {
       this.validatorProcess!.on('error', (err: Error) => {
         clearTimeout(timeout);
         clearInterval(poller);
-        console.error('Failed to start validator:', err);
+        this.error('Failed to start validator:', err);
         reject(err);
       });
       this.validatorProcess!.on('exit', (code: number) => {
         clearTimeout(timeout);
         clearInterval(poller);
-        console.log(`Validator process exited with code ${code}`);
+        this.log(`Validator process exited with code ${code}`);
         this.isReady = false;
         this.validatorProcess = null;
         if (!resolved) reject(new Error(`Validator exited with code ${code}`));
@@ -171,7 +185,7 @@ export class ValidatorService {
         raw: JSON.stringify(outcome),
       };
     } catch (error) {
-      console.error('Validation request failed:', error);
+      this.error('Validation request failed:', error);
       return {
         valid: false,
         issues: [

@@ -7,6 +7,7 @@ import { stdin as input, stdout as output } from 'node:process';
 import { createStores } from '../stores.adapter';
 import { config as appConfig } from '../config';
 import { createJob, startJob } from '../jobs';
+import { shutdownLocalValidator } from '../validator';
 import type { Artifact, ID, Job, Stores } from '../types';
 
 // Ensure document types are registered before jobs run.
@@ -27,6 +28,9 @@ interface JobTracker {
   currentStepKey?: string;
   currentStepLabel?: string;
   totalTokens?: number;
+  createdAt?: number;
+  startedAt?: number;
+  completedAt?: number;
 }
 
 const trackers = new Map<ID, JobTracker>();
@@ -36,6 +40,65 @@ const jobArtifactsWritten = new Map<ID, {
   final: Map<string, WrittenArtifact>;
   intermediate: Map<string, WrittenArtifact>;
 }>();
+
+function toMillis(value?: number | string | null): number | undefined {
+  if (value == null) return undefined;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? undefined : parsed;
+}
+
+function formatDuration(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  const hrs = Math.floor(total / 3600);
+  const mins = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  const mm = mins.toString().padStart(2, '0');
+  const ss = secs.toString().padStart(2, '0');
+  if (hrs > 0) return `${hrs.toString().padStart(2, '0')}:${mm}:${ss}`;
+  return `${mm}:${ss}`;
+}
+
+function computeRuntimeSeconds(tracker: JobTracker): number | null {
+  const start = tracker.startedAt ?? (tracker.completedAt != null ? tracker.createdAt : undefined);
+  if (start == null) return null;
+  const end = tracker.completedAt ?? Date.now();
+  const diff = end - start;
+  if (!Number.isFinite(diff) || diff < 0) return null;
+  return Math.round(diff / 1000);
+}
+
+let runtimeTicker: ReturnType<typeof setInterval> | null = null;
+
+function hasActiveRuntime(): boolean {
+  for (const tracker of trackers.values()) {
+    if (tracker.status === 'running' && tracker.startedAt != null && tracker.completedAt == null) return true;
+  }
+  return false;
+}
+
+function ensureRuntimeTicker(): void {
+  if (!output.isTTY) return;
+  if (runtimeTicker) return;
+  runtimeTicker = setInterval(() => {
+    if (!hasActiveRuntime()) {
+      if (runtimeTicker) {
+        clearInterval(runtimeTicker);
+        runtimeTicker = null;
+      }
+      return;
+    }
+    render();
+  }, 1000);
+}
+
+function stopRuntimeTickerIfIdle(): void {
+  if (!runtimeTicker) return;
+  if (!hasActiveRuntime()) {
+    clearInterval(runtimeTicker);
+    runtimeTicker = null;
+  }
+}
 
 function safeSegment(value: string, fallback = 'artifact'): string {
   const cleaned = value.replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -203,6 +266,7 @@ interface JobMetadata {
     totalTokens?: number;
     llmInTokens?: number;
     llmOutTokens?: number;
+    runtimeSeconds?: number;
   };
   outputs: {
     final: ArtifactSummary[];
@@ -213,6 +277,7 @@ interface JobMetadata {
     model: string;
     temperature: number;
     llmMaxConcurrency?: number;
+    valMaxIters?: number | null;
   };
   cli: Record<string, any>;
 }
@@ -233,6 +298,7 @@ interface RunJobOptions {
   saveIntermediate: boolean;
   config: ReturnType<typeof appConfig.get>;
   cliContext: Record<string, any>;
+  valMaxIters?: number | null;
 }
 
 function ensureTracker(jobId: ID, init?: Partial<JobTracker>): JobTracker {
@@ -244,6 +310,9 @@ function ensureTracker(jobId: ID, init?: Partial<JobTracker>): JobTracker {
     if (init?.status) existing.status = init.status;
     if (init?.lastError !== undefined) existing.lastError = init.lastError;
     if (init?.currentStepLabel) existing.currentStepLabel = init.currentStepLabel;
+    if (init?.createdAt != null) existing.createdAt = init.createdAt;
+    if (init?.startedAt != null) existing.startedAt = init.startedAt;
+    if (init?.completedAt != null) existing.completedAt = init.completedAt;
     return existing;
   }
   const tracker: JobTracker = {
@@ -255,6 +324,9 @@ function ensureTracker(jobId: ID, init?: Partial<JobTracker>): JobTracker {
     steps: new Map(),
     updatedAt: Date.now(),
     currentStepLabel: init?.currentStepLabel ?? init?.status ?? 'queued',
+    createdAt: init?.createdAt ?? Date.now(),
+    startedAt: init?.startedAt,
+    completedAt: init?.completedAt,
   };
   trackers.set(jobId, tracker);
   return tracker;
@@ -292,6 +364,8 @@ function render(): void {
         .map(([phase, v]) => `${PHASE_LABELS[phase]} ${v.done}/${v.total}`);
       if (phaseParts.length) lines.push(`    Phases: ${phaseParts.join('  ')}`);
     }
+    const runtimeSeconds = computeRuntimeSeconds(job);
+    if (runtimeSeconds != null) lines.push(`    Runtime: ${formatDuration(runtimeSeconds)}`);
     if (job.totalTokens != null) lines.push(`    Tokens: ${job.totalTokens}`);
     if (job.lastError) {
       lines.push(`  last error: ${job.lastError}`);
@@ -304,13 +378,26 @@ function trackEvents(stores: Stores): void {
   stores.events.subscribe((ev: any) => {
     switch (ev.type) {
       case 'job_created': {
-        ensureTracker(ev.jobId, {
+        const tracker = ensureTracker(ev.jobId, {
           title: ev.title,
           type: ev.jobType,
           status: 'queued',
           currentStepLabel: 'queued',
         });
         console.log(`Queued job ${ev.title}`);
+        void (async () => {
+          try {
+            const job = await stores.jobs.get(ev.jobId);
+            if (!job) return;
+            const created = toMillis(job.createdAt);
+            if (created != null) tracker.createdAt = created;
+            if (job.status === 'running' && tracker.startedAt == null) {
+              tracker.startedAt = toMillis(job.updatedAt) ?? created ?? Date.now();
+              ensureRuntimeTicker();
+            }
+            render();
+          } catch {}
+        })();
         break;
       }
       case 'job_status': {
@@ -318,6 +405,13 @@ function trackEvents(stores: Stores): void {
         tracker.status = ev.status;
         tracker.lastError = ev.lastError ?? null;
         tracker.updatedAt = Date.now();
+        if (ev.status === 'running' && tracker.startedAt == null) {
+          tracker.startedAt = Date.now();
+        }
+        if (ev.status === 'running') ensureRuntimeTicker();
+        if (ev.status === 'done' || ev.status === 'failed') {
+          tracker.completedAt = tracker.completedAt ?? Date.now();
+        }
         if (ev.status === 'running' && !tracker.currentStepLabel) tracker.currentStepLabel = 'starting';
         if (ev.status === 'done') {
           tracker.currentStepLabel = 'done';
@@ -331,6 +425,25 @@ function trackEvents(stores: Stores): void {
             resolver({ status: ev.status, lastError: tracker.lastError });
           }
         }
+        if (ev.status === 'done' || ev.status === 'failed') stopRuntimeTickerIfIdle();
+        void (async () => {
+          try {
+            const job = await stores.jobs.get(ev.jobId);
+            if (!job) return;
+            const created = toMillis(job.createdAt);
+            if (created != null) tracker.createdAt = tracker.createdAt ?? created;
+            const updated = toMillis(job.updatedAt);
+            if (ev.status === 'running' && tracker.startedAt == null) {
+              tracker.startedAt = updated ?? created ?? Date.now();
+              ensureRuntimeTicker();
+            }
+            if ((ev.status === 'done' || ev.status === 'failed') && updated != null) {
+              tracker.completedAt = updated;
+              stopRuntimeTickerIfIdle();
+            }
+            render();
+          } catch {}
+        })();
         break;
       }
       case 'step_saved': {
@@ -426,6 +539,46 @@ async function persistArtifact(stores: Stores, ev: any): Promise<void> {
 
   if (classification === 'final') {
     console.log(`📄 [${PHASE_LABELS[phase]}] Final artifact saved: ${filePath}`);
+    await maybeReplicateFinalArtifact({
+      artifact,
+      data,
+      layout,
+      stores,
+      jobId: ev.jobId,
+      record,
+    });
+  }
+}
+
+async function maybeReplicateFinalArtifact(params: {
+  artifact: Artifact;
+  data: string;
+  layout: ExportLayout;
+  stores: Stores;
+  jobId: ID;
+  record: { final: Map<string, WrittenArtifact>; intermediate: Map<string, WrittenArtifact> };
+}): Promise<void> {
+  const { artifact, data, layout, stores, jobId, record } = params;
+  if (artifact.kind !== 'FhirBundle') return;
+  try {
+    const job = await stores.jobs.get(jobId);
+    if (!job || job.type !== 'note_and_fhir') return;
+    const finalizedDir = layout.phaseDirs.finalized ?? layout.phaseDirs.other;
+    await fs.mkdir(finalizedDir, { recursive: true });
+    const versionPart = Number.isFinite(artifact.version) ? String(artifact.version) : 'latest';
+    const finalePath = join(finalizedDir, `fhirbundle-v${versionPart}.json`);
+    await fs.writeFile(finalePath, data, 'utf8');
+    const rel = layout.rel(finalePath).replace(/\\/g, '/');
+    record.final.set(`${artifact.id}::finalized`, {
+      absolute: finalePath,
+      relative: rel,
+      artifact,
+      classification: 'final',
+      phase: 'finalized',
+    });
+    console.log(`📄 [${PHASE_LABELS.finalized}] Final artifact saved: ${finalePath}`);
+  } catch (err) {
+    console.warn('Failed to replicate finalized FHIR bundle', err);
   }
 }
 
@@ -440,6 +593,10 @@ function logJobSummary(result: RunResult, saveIntermediate: boolean): void {
     console.log(`Total LLM tokens: ${tokenTotal}`);
     const tracker = trackers.get(result.jobId);
     if (tracker) tracker.totalTokens = tokenTotal;
+  }
+  const runtimeSeconds = result.metadata.metrics?.runtimeSeconds;
+  if (runtimeSeconds != null) {
+    console.log(`Runtime: ${formatDuration(runtimeSeconds)}`);
   }
   const summaryList = (items: WrittenArtifact[]) =>
     items.length ? items.map((f) => `  - [${PHASE_LABELS[f.phase]}] ${f.relative}`).join('\n') : '  (none)';
@@ -471,6 +628,7 @@ interface ParsedArgs {
   finalOnly?: boolean;
   fhirConcurrency?: number;
   llmMaxConcurrency?: number;
+  valMaxIters?: number;
   help?: boolean;
 }
 
@@ -540,6 +698,16 @@ function parseArgs(argv: string[]): ParsedArgs {
           parsed.llmMaxConcurrency = Math.floor(value);
         }
         break;
+      case '--val-max-iters':
+        {
+          const raw = argv[++i];
+          const value = raw != null ? Number(raw) : NaN;
+          if (!Number.isFinite(value) || value <= 0) {
+            throw new Error(`Invalid val-max-iters value: ${raw ?? ''}`);
+          }
+          parsed.valMaxIters = Math.floor(value);
+        }
+        break;
       case '--final-only':
       case '--no-intermediate':
         parsed.finalOnly = true;
@@ -572,6 +740,7 @@ Options:
   --temperature <value>   Override PUBLIC_KILN_TEMPERATURE / KILN_TEMPERATURE
   --fhir-concurrency <n>  Override PUBLIC_KILN_FHIR_GEN_CONCURRENCY / KILN_FHIR_CONCURRENCY
   --llm-max-concurrency <n> Override PUBLIC_KILN_LLM_MAX_CONCURRENCY / KILN_LLM_MAX_CONCURRENCY
+  --val-max-iters <n>     Maximum refinement iterations per FHIR resource
   --final-only            Save only final artifacts (skip intermediate outputs)
   --help, -h              Show this message
 `;
@@ -620,7 +789,13 @@ async function runJob(
   const normalized = type === 'fhir' ? normalizeFhirNoteInput(trimmed) : trimmed;
   const inputs = type === 'fhir' ? { noteText: normalized } : ({ sketch: normalized } as Record<string, string>);
   const jobId = await createJob(stores, type, inputs as any, title);
-  ensureTracker(jobId, { title, type });
+  const initialRecord = await stores.jobs.get(jobId).catch(() => undefined);
+  const createdAtMs = toMillis(initialRecord?.createdAt) ?? Date.now();
+  const tracker = ensureTracker(jobId, { title, type, createdAt: createdAtMs });
+  if (initialRecord?.status === 'running' && tracker.startedAt == null) {
+    tracker.startedAt = toMillis(initialRecord.updatedAt) ?? createdAtMs;
+    ensureRuntimeTicker();
+  }
   render();
 
   const layout = await opts.buildLayout(jobId);
@@ -646,6 +821,20 @@ async function runJob(
       const steps = await stores.steps.listByJob(jobId);
       for (const step of steps) totalTokens += Number(step.llmTokens || 0);
     } catch {}
+
+    const trackerSnapshot = trackers.get(jobId);
+    const startMs = trackerSnapshot?.startedAt ?? toMillis(jobRecord?.createdAt);
+    const completedMs = trackerSnapshot?.completedAt ?? toMillis(jobRecord?.updatedAt) ?? toMillis(completedAt);
+    const runtimeSeconds =
+      startMs != null && completedMs != null && completedMs >= startMs ? Math.round((completedMs - startMs) / 1000) : null;
+    if (trackerSnapshot && runtimeSeconds != null && trackerSnapshot.completedAt == null && completedMs != null) {
+      trackerSnapshot.completedAt = completedMs;
+    }
+
+    const metrics: JobMetadata['metrics'] = {
+      totalTokens,
+    };
+    if (runtimeSeconds != null) metrics.runtimeSeconds = runtimeSeconds;
 
     const outputs: JobMetadata['outputs'] = {
       final: finalArtifacts.map(({ relative, artifact, classification, phase }) => ({
@@ -676,15 +865,14 @@ async function runJob(
       createdAt: jobRecord?.createdAt,
       updatedAt: jobRecord?.updatedAt,
       completedAt,
-      metrics: {
-        totalTokens,
-      },
+      metrics,
       outputs,
       config: {
         baseURL: opts.config.baseURL,
         model: opts.config.model,
         temperature: opts.config.temperature,
         llmMaxConcurrency: opts.config.llmMaxConcurrency,
+        valMaxIters: opts.valMaxIters ?? null,
       },
       cli: {
         ...opts.cliContext,
@@ -748,6 +936,12 @@ async function main(): Promise<void> {
   const dataRoot = args.dataDir || process.env.KILN_DATA_DIR || join(process.cwd(), '.kiln-data');
   process.env.KILN_DATA_DIR = dataRoot;
 
+  if (typeof args.valMaxIters === 'number') {
+    try {
+      localStorage.setItem('FHIR_VALIDATION_MAX_ITERS', String(args.valMaxIters));
+    } catch {}
+  }
+
   if (args.llmUrl) {
     process.env.PUBLIC_KILN_LLM_URL = args.llmUrl;
     if (!process.env.KILN_BASE_URL) process.env.KILN_BASE_URL = args.llmUrl;
@@ -791,14 +985,16 @@ async function main(): Promise<void> {
     temperatureOverride: args.temperature ?? null,
     modelOverride: args.model ?? null,
     dataRoot,
+    valMaxIters: args.valMaxIters ?? null,
   };
 
-  if (args.mode === 'batch') {
-    if (!args.file) throw new Error('Batch mode requires a --file path.');
-    const narratives = await readBatchFile(args.file);
-    console.log(`Processing ${narratives.length} narratives from ${args.file}...`);
+  try {
+    if (args.mode === 'batch') {
+      if (!args.file) throw new Error('Batch mode requires a --file path.');
+      const narratives = await readBatchFile(args.file);
+      console.log(`Processing ${narratives.length} narratives from ${args.file}...`);
 
-    const batchId = `batch_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+      const batchId = `batch_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
     const batchRoot = join(dataRoot, 'batches', batchId);
     await fs.mkdir(batchRoot, { recursive: true });
 
@@ -836,6 +1032,7 @@ async function main(): Promise<void> {
           saveIntermediate,
           config: cfg,
           cliContext: { ...batchContext, itemIndex: i + 1 },
+          valMaxIters: args.valMaxIters ?? null,
         });
         results.push({ result, label });
         logJobSummary(result, saveIntermediate);
@@ -884,40 +1081,44 @@ async function main(): Promise<void> {
 
     const batchMetadataPath = join(batchRoot, 'metadata.json');
     await fs.writeFile(batchMetadataPath, JSON.stringify(batchMetadata, null, 2), 'utf8');
-    console.log(`Batch metadata written to ${batchMetadataPath}`);
-  } else {
-    const narrative = args.text ?? '';
-    const label = safeSegment(narrative.slice(0, 40) || 'single');
-    const layoutBuilder = (jobId: ID): ExportLayout => {
-      const folder = safeSegment(jobId);
-      const jobRoot = join(dataRoot, 'jobs', folder);
-      const metadataPath = join(jobRoot, 'metadata.json');
-      const phaseDirs: Record<PhaseId, string> = {
-        planning: join(jobRoot, PHASE_DIRS.planning),
-        sections: join(jobRoot, PHASE_DIRS.sections),
-        assembly: join(jobRoot, PHASE_DIRS.assembly),
-        note_review: join(jobRoot, PHASE_DIRS.note_review),
-        finalized: join(jobRoot, PHASE_DIRS.finalized),
-        fhir: join(jobRoot, PHASE_DIRS.fhir),
-        terminology: join(jobRoot, PHASE_DIRS.terminology),
-        other: join(jobRoot, PHASE_DIRS.other),
+      console.log(`Batch metadata written to ${batchMetadataPath}`);
+    } else {
+      const narrative = args.text ?? '';
+      const label = safeSegment(narrative.slice(0, 40) || 'single');
+      const layoutBuilder = (jobId: ID): ExportLayout => {
+        const folder = safeSegment(jobId);
+        const jobRoot = join(dataRoot, 'jobs', folder);
+        const metadataPath = join(jobRoot, 'metadata.json');
+        const phaseDirs: Record<PhaseId, string> = {
+          planning: join(jobRoot, PHASE_DIRS.planning),
+          sections: join(jobRoot, PHASE_DIRS.sections),
+          assembly: join(jobRoot, PHASE_DIRS.assembly),
+          note_review: join(jobRoot, PHASE_DIRS.note_review),
+          finalized: join(jobRoot, PHASE_DIRS.finalized),
+          fhir: join(jobRoot, PHASE_DIRS.fhir),
+          terminology: join(jobRoot, PHASE_DIRS.terminology),
+          other: join(jobRoot, PHASE_DIRS.other),
+        };
+        return {
+          jobRoot,
+          metadataPath,
+          phaseDirs,
+          rel: (abs: string) => relative(jobRoot, abs),
+        };
       };
-      return {
-        jobRoot,
-        metadataPath,
-        phaseDirs,
-        rel: (abs: string) => relative(jobRoot, abs),
-      };
-    };
 
-    const result = await runJob(stores, args.type || 'fhir', narrative, label, {
-      buildLayout: layoutBuilder,
-      saveIntermediate,
-      config: cfg,
-      cliContext: cliBase,
-    });
+      const result = await runJob(stores, args.type || 'fhir', narrative, label, {
+        buildLayout: layoutBuilder,
+        saveIntermediate,
+        config: cfg,
+        cliContext: cliBase,
+        valMaxIters: args.valMaxIters ?? null,
+      });
 
-    logJobSummary(result, saveIntermediate);
+      logJobSummary(result, saveIntermediate);
+    }
+  } finally {
+    shutdownLocalValidator();
   }
 }
 

@@ -1,5 +1,6 @@
 import type { Context } from './types';
 import { getTerminologyServerURL, sha256 } from './helpers';
+import { getLocalTerminologySearch } from './tools';
 
 export type CodingEntry = {
   pointer: string;
@@ -82,12 +83,41 @@ export async function batchExists(
 > {
   const rawBase = (getTerminologyServerURL() || '').trim();
   if (!rawBase) {
-    return items.map((item) => ({
-      system: item.system,
-      code: item.code,
-      exists: false,
-      normalizedSystem: item.system,
-    }));
+    const local = await getLocalTerminologySearch();
+    if (!local) {
+      return items.map((item) => ({
+        system: item.system,
+        code: item.code,
+        exists: false,
+        normalizedSystem: item.system,
+      }));
+    }
+    const normalize = typeof local.normalizeSystem === 'function' ? local.normalizeSystem.bind(local) : (v?: string) => v;
+    const db = typeof local.getDb === 'function' ? local.getDb() : null;
+    const queryFn = db && typeof db.query === 'function' ? db.query.bind(db) : null;
+    return items.map((item) => {
+      const norm = normalize(item.system);
+      const normalizedSystem = norm ?? item.system;
+      if (!norm || !item.code || !queryFn) {
+        return { system: item.system, code: item.code, exists: false, normalizedSystem };
+      }
+      try {
+        const stmt = queryFn(`SELECT display FROM concepts WHERE system = ? AND code = ? LIMIT 1`);
+        const row = stmt && typeof stmt.get === 'function' ? stmt.get(norm, String(item.code)) : undefined;
+        if (row) {
+          return {
+            system: item.system,
+            code: item.code,
+            exists: true,
+            display: row.display || '',
+            normalizedSystem,
+          };
+        }
+        return { system: item.system, code: item.code, exists: false, normalizedSystem };
+      } catch {
+        return { system: item.system, code: item.code, exists: false, normalizedSystem };
+      }
+    });
   }
   const base = rawBase.replace(/\/$/, '');
   const doFetch = async () => {
