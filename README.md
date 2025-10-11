@@ -14,10 +14,9 @@ Built by Josh Mandel, MD.
 
 ## Headless quick start:
 
-Install project dependencies
+After cloning the repo, install project dependencies
 ```sh
-git clone <repo-url> kiln
-cd kiln
+cd kiln-headless
 bun install
 ```
 
@@ -47,6 +46,14 @@ bun test
 bun run headless --single \
   --text "Mr. Grok Four is 42 years old and has the flu" \
   --type note_and_fhir \
+  --llm-url https://openrouter.ai/api/v1 \
+  --model x-ai/grok-4-fast:free \
+  --val-max-iters 30
+
+
+bun run headless --batch \
+  --file example-batch/sample-narratives.txt \
+  --type narrative \
   --llm-url https://openrouter.ai/api/v1 \
   --model x-ai/grok-4-fast:free \
   --val-max-iters 30
