@@ -625,6 +625,7 @@ interface ParsedArgs {
   llmUrl?: string;
   model?: string;
   temperature?: number;
+  apiKey?: string;
   finalOnly?: boolean;
   fhirConcurrency?: number;
   llmMaxConcurrency?: number;
@@ -666,6 +667,9 @@ function parseArgs(argv: string[]): ParsedArgs {
         break;
       case '--model':
         parsed.model = argv[++i];
+        break;
+      case '--api-key':
+        parsed.apiKey = argv[++i];
         break;
       case '--temperature':
       case '--temp':
@@ -737,6 +741,7 @@ Options:
   --output, -o <dir>      Directory for job/batch folders (default: $KILN_DATA_DIR or ./kiln-data)
   --llm-url <url>         Override PUBLIC_KILN_LLM_URL for this run (also sets KILN_BASE_URL if unset)
   --model <id>            Override PUBLIC_KILN_MODEL / KILN_MODEL
+  --api-key <value>       Use API key for this run (overrides KILN_API_KEY env)
   --temperature <value>   Override PUBLIC_KILN_TEMPERATURE / KILN_TEMPERATURE
   --fhir-concurrency <n>  Override PUBLIC_KILN_FHIR_GEN_CONCURRENCY / KILN_FHIR_CONCURRENCY
   --llm-max-concurrency <n> Override PUBLIC_KILN_LLM_MAX_CONCURRENCY / KILN_LLM_MAX_CONCURRENCY
@@ -965,6 +970,10 @@ async function main(): Promise<void> {
     process.env.PUBLIC_KILN_LLM_MAX_CONCURRENCY = v;
     process.env.KILN_LLM_MAX_CONCURRENCY = v;
   }
+  if (args.apiKey) {
+    process.env.KILN_API_KEY = args.apiKey;
+    process.env.PUBLIC_KILN_API_KEY = args.apiKey;
+  }
 
   await fs.mkdir(dataRoot, { recursive: true });
   await fs.mkdir(join(dataRoot, 'jobs'), { recursive: true });
@@ -984,6 +993,7 @@ async function main(): Promise<void> {
     llmUrlOverride: args.llmUrl ?? null,
     temperatureOverride: args.temperature ?? null,
     modelOverride: args.model ?? null,
+    apiKeyOverride: args.apiKey ?? null,
     dataRoot,
     valMaxIters: args.valMaxIters ?? null,
   };

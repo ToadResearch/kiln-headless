@@ -48,15 +48,16 @@ bun run headless --single \
   --type note_and_fhir \
   --llm-url https://openrouter.ai/api/v1 \
   --model x-ai/grok-4-fast:free \
-  --val-max-iters 30
+  --val-max-iters 30 \
+  -- api-key "$OPENROUTER_API_KEY" \
 
 
 bun run headless --batch \
   --file example-batch/sample-narratives.txt \
   --type narrative \
-  --llm-url https://openrouter.ai/api/v1 \
   --model x-ai/grok-4-fast:free \
-  --val-max-iters 30
+  --val-max-iters 30 \
+  -- api-key "$OPENROUTER_API_KEY" \
 
 ```
   The CLI writes to `./kiln-data` (change with `--output` or `KILN_DATA_DIR`). Each job lives under `kiln-data/jobs/<jobId>/` with `metadata.json` plus per-phase folders (`planning/`, `sections/`, `assembly/`, `note_review/`, `finalized/`, `fhir/`, `terminology/`, and `other/`). Artifacts are flushed to disk as soon as their steps complete so large intermediates never accumulate in memory. Batch runs (`--batch --file narratives.txt`) create `kiln-data/batches/<batchId>/jobs/<jobId>/…` alongside consolidated batch metadata. Override LLM and validation settings at runtime without editing env files.
