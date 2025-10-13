@@ -1005,92 +1005,95 @@ async function main(): Promise<void> {
       console.log(`Processing ${narratives.length} narratives from ${args.file}...`);
 
       const batchId = `batch_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
-    const batchRoot = join(dataRoot, 'batches', batchId);
-    await fs.mkdir(batchRoot, { recursive: true });
+      const batchRoot = join(dataRoot, 'batches', batchId);
+      await fs.mkdir(batchRoot, { recursive: true });
 
-    const batchContext = { ...cliBase, batchId, sourceFile: args.file };
-    const results: Array<{ result?: RunResult; error?: any; label: string }> = [];
+      const batchContext = { ...cliBase, batchId, sourceFile: args.file };
 
-    const layoutBuilder = (jobId: ID): ExportLayout => {
-      const jobFolder = safeSegment(jobId);
-      const jobRoot = join(batchRoot, 'jobs', jobFolder);
-      const metadataPath = join(jobRoot, 'metadata.json');
-      const phaseDirs: Record<PhaseId, string> = {
-        planning: join(jobRoot, PHASE_DIRS.planning),
-        sections: join(jobRoot, PHASE_DIRS.sections),
-        assembly: join(jobRoot, PHASE_DIRS.assembly),
-        note_review: join(jobRoot, PHASE_DIRS.note_review),
-        finalized: join(jobRoot, PHASE_DIRS.finalized),
-        fhir: join(jobRoot, PHASE_DIRS.fhir),
-        terminology: join(jobRoot, PHASE_DIRS.terminology),
-        other: join(jobRoot, PHASE_DIRS.other),
+      const layoutBuilder = (jobId: ID): ExportLayout => {
+        const jobFolder = safeSegment(jobId);
+        const jobRoot = join(batchRoot, 'jobs', jobFolder);
+        const metadataPath = join(jobRoot, 'metadata.json');
+        const phaseDirs: Record<PhaseId, string> = {
+          planning: join(jobRoot, PHASE_DIRS.planning),
+          sections: join(jobRoot, PHASE_DIRS.sections),
+          assembly: join(jobRoot, PHASE_DIRS.assembly),
+          note_review: join(jobRoot, PHASE_DIRS.note_review),
+          finalized: join(jobRoot, PHASE_DIRS.finalized),
+          fhir: join(jobRoot, PHASE_DIRS.fhir),
+          terminology: join(jobRoot, PHASE_DIRS.terminology),
+          other: join(jobRoot, PHASE_DIRS.other),
+        };
+        return {
+          jobRoot,
+          metadataPath,
+          phaseDirs,
+          rel: (abs: string) => relative(jobRoot, abs),
+        };
       };
-      return {
-        jobRoot,
-        metadataPath,
-        phaseDirs,
-        rel: (abs: string) => relative(jobRoot, abs),
-      };
-    };
 
-    for (let i = 0; i < narratives.length; i++) {
-      const raw = narratives[i];
-      const label = `${safeSegment(raw.slice(0, 40) || `item-${i + 1}`)} (${i + 1}/${narratives.length})`;
-      try {
-        const result = await runJob(stores, args.type || 'fhir', raw, label, {
-          buildLayout: layoutBuilder,
-          saveIntermediate,
-          config: cfg,
-          cliContext: { ...batchContext, itemIndex: i + 1 },
-          valMaxIters: args.valMaxIters ?? null,
-        });
-        results.push({ result, label });
-        logJobSummary(result, saveIntermediate);
-      } catch (err: any) {
-        results.push({ error: err, label });
-        console.error(`❌ Failed to process batch item ${i + 1}: ${err?.message || err}`);
-      }
-    }
+      const jobPromises = narratives.map((raw, index) => {
+        const itemNumber = index + 1;
+        const label = `${safeSegment(raw.slice(0, 40) || `item-${itemNumber}`)} (${itemNumber}/${narratives.length})`;
+        return (async (): Promise<{ result?: RunResult; error?: any; label: string }> => {
+          try {
+            const result = await runJob(stores, args.type || 'fhir', raw, label, {
+              buildLayout: layoutBuilder,
+              saveIntermediate,
+              config: cfg,
+              cliContext: { ...batchContext, itemIndex: itemNumber },
+              valMaxIters: args.valMaxIters ?? null,
+            });
+            logJobSummary(result, saveIntermediate);
+            return { result, label };
+          } catch (err: any) {
+            console.error(`❌ Failed to process batch item ${itemNumber}: ${err?.message || err}`);
+            return { error: err, label };
+          }
+        })();
+      });
 
-    const toBatchRelative = (absPath: string) => relative(batchRoot, absPath).replace(/\\/g, '/');
+      const results = await Promise.all(jobPromises);
 
-    const batchMetadata = {
-      batchId,
-      createdAt: new Date().toISOString(),
-      sourceFile: args.file,
-      narrativeCount: narratives.length,
-      config: {
-        baseURL: cfg.baseURL,
-        model: cfg.model,
-        temperature: cfg.temperature,
-        llmMaxConcurrency: cfg.llmMaxConcurrency,
-      },
-      cli: batchContext,
-      jobs: results.map((entry, idx) => {
-        if (entry.result) {
-          const res = entry.result;
+      const toBatchRelative = (absPath: string) => relative(batchRoot, absPath).replace(/\\/g, '/');
+
+      const batchMetadata = {
+        batchId,
+        createdAt: new Date().toISOString(),
+        sourceFile: args.file,
+        narrativeCount: narratives.length,
+        config: {
+          baseURL: cfg.baseURL,
+          model: cfg.model,
+          temperature: cfg.temperature,
+          llmMaxConcurrency: cfg.llmMaxConcurrency,
+        },
+        cli: batchContext,
+        jobs: results.map((entry, idx) => {
+          if (entry.result) {
+            const res = entry.result;
+            return {
+              index: idx + 1,
+              jobId: res.jobId,
+              title: res.title,
+              status: res.metadata.status,
+              lastError: res.metadata.lastError,
+              finalOutputs: res.final.map((f) => toBatchRelative(f.absolute)),
+              intermediateOutputs: saveIntermediate ? res.intermediate.map((f) => toBatchRelative(f.absolute)) : undefined,
+              metadata: toBatchRelative(res.metadataPath),
+            };
+          }
           return {
             index: idx + 1,
-            jobId: res.jobId,
-            title: res.title,
-            status: res.metadata.status,
-            lastError: res.metadata.lastError,
-            finalOutputs: res.final.map((f) => toBatchRelative(f.absolute)),
-            intermediateOutputs: saveIntermediate ? res.intermediate.map((f) => toBatchRelative(f.absolute)) : undefined,
-            metadata: toBatchRelative(res.metadataPath),
+            label: entry.label,
+            status: 'error',
+            error: String(entry.error?.message || entry.error || 'Unknown error'),
           };
-        }
-        return {
-          index: idx + 1,
-          label: entry.label,
-          status: 'error',
-          error: String(entry.error?.message || entry.error || 'Unknown error'),
-        };
-      }),
-    };
+        }),
+      };
 
-    const batchMetadataPath = join(batchRoot, 'metadata.json');
-    await fs.writeFile(batchMetadataPath, JSON.stringify(batchMetadata, null, 2), 'utf8');
+      const batchMetadataPath = join(batchRoot, 'metadata.json');
+      await fs.writeFile(batchMetadataPath, JSON.stringify(batchMetadata, null, 2), 'utf8');
       console.log(`Batch metadata written to ${batchMetadataPath}`);
     } else {
       const narrative = args.text ?? '';
