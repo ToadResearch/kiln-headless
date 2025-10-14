@@ -53,22 +53,26 @@ bun run headless --single \
 
 
 bun run headless --batch \
-  --file example-batch/sample-narratives.txt \
-  --type narrative \
+  --file example-batch/sample.jsonl \
+  --column "context" \
+  --type note_and_fhir \
   --model x-ai/grok-4-fast:free \
   --val-max-iters 30 \
   -- api-key "$OPENROUTER_API_KEY" \
 
 ```
-  The CLI writes to `./kiln-data` (change with `--output` or `KILN_DATA_DIR`). Each job lives under `kiln-data/jobs/<jobId>/` with `metadata.json` plus per-phase folders (`planning/`, `sections/`, `assembly/`, `note_review/`, `finalized/`, `fhir/`, `terminology/`, and `other/`). Artifacts are flushed to disk as soon as their steps complete so large intermediates never accumulate in memory. Batch runs (`--batch --file narratives.txt`) create `kiln-data/batches/<batchId>/jobs/<jobId>/…` alongside consolidated batch metadata. Override LLM and validation settings at runtime without editing env files.
+  Batch mode now expects JSON Lines input: each line in the `.jsonl` file must be a JSON object containing the clinical text under the key passed to `--column`. The CLI writes run artifacts to `./kiln-data` (change with `--output` or `KILN_DATA_DIR`) and saves the post-processed batch file to `./output/<original-name>.jsonl` by default (override with `--result-dir` / `--result-file`). Each job lives under `kiln-data/jobs/<jobId>/` with `metadata.json` plus per-phase folders (`planning/`, `sections/`, `assembly/`, `note_review/`, `finalized/`, `fhir/`, `terminology/`, and `other/`). Batch runs create `kiln-data/batches/<batchId>/jobs/<jobId>/…` alongside consolidated batch metadata. The exported JSONL mirrors the input rows and appends `Kiln Narrative` and/or `Kiln FHIR` columns (plus status/error info) according to the `--type` selected. Override LLM and validation settings at runtime without editing env files.
 
   | Flag | Description | Default |
   | --- | --- | --- |
-  | `--single` / `--batch` | Process one narrative or a batch file (`---` separators) | `--single` |
+  | `--single` / `--batch` | Process one narrative or a JSONL batch (`--column` required) | `--single` |
   | `--type` | Document type (`narrative`, `fhir`, or `note_and_fhir`) | `fhir` |
   | `--text` | Narrative text (prompts interactively if omitted) | none |
-  | `--file` | Batch input file path | none |
+  | `--file` | Batch JSONL input file path | none |
+  | `--column` | JSON key containing the clinical text for batch rows | none |
   | `--output`, `-o` | Data root containing job/batch folders | `$KILN_DATA_DIR` or `./kiln-data` |
+  | `--result-dir` | Where to write the consolidated JSONL output | `./output` |
+  | `--result-file` | Override the default output filename | matches source filename |
   | `--llm-url` | Overrides `PUBLIC_KILN_LLM_URL` / `KILN_BASE_URL` | env config |
   | `--model` | Overrides `PUBLIC_KILN_MODEL` / `KILN_MODEL` | env config |
   | `--temperature` | Overrides `PUBLIC_KILN_TEMPERATURE` / `KILN_TEMPERATURE` | env config |

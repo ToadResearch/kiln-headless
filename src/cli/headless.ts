@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import '../headless/globals';
 import * as fs from 'node:fs/promises';
-import { join, relative } from 'node:path';
+import { join, relative, basename, resolve } from 'node:path';
 import * as readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { createStores } from '../stores.adapter';
@@ -185,6 +185,13 @@ const KEYWORD_PHASES: Array<{ phase: PhaseId; keywords: string[] }> = [
   { phase: 'terminology', keywords: ['terminology', 'coding', 'codes', 'loinc', 'snomed', 'tx/', 'concept'] },
   { phase: 'fhir', keywords: ['fhir', 'bundle', 'resource', 'validate', 'refine', 'composition'] },
 ];
+
+const BATCH_OUTPUT_COLUMNS = {
+  narrative: 'Kiln Narrative',
+  fhir: 'Kiln FHIR',
+  status: 'Kiln Status',
+  error: 'Kiln Error',
+} as const;
 
 function classifyArtifact(artifact: Artifact): ArtifactClass {
   const kind = String(artifact?.kind || '');
@@ -621,6 +628,7 @@ interface ParsedArgs {
   type?: 'fhir' | 'narrative' | 'note_and_fhir';
   text?: string;
   file?: string;
+  column?: string;
   dataDir?: string;
   llmUrl?: string;
   model?: string;
@@ -630,6 +638,8 @@ interface ParsedArgs {
   fhirConcurrency?: number;
   llmMaxConcurrency?: number;
   valMaxIters?: number;
+  resultDir?: string;
+  resultFile?: string;
   help?: boolean;
 }
 
@@ -657,9 +667,18 @@ function parseArgs(argv: string[]): ParsedArgs {
       case '-f':
         parsed.file = argv[++i];
         break;
+      case '--column':
+        parsed.column = argv[++i];
+        break;
       case '--output':
       case '-o':
         parsed.dataDir = argv[++i];
+        break;
+      case '--result-dir':
+        parsed.resultDir = argv[++i];
+        break;
+      case '--result-file':
+        parsed.resultFile = argv[++i];
         break;
       case '--llm-url':
       case '--llm':
@@ -734,11 +753,14 @@ Usage:
 
 Options:
   --single, -s            Process a single narrative (default when not specified)
-  --batch, -b             Process a batch file (narratives separated by lines starting with '---')
+  --batch, -b             Process a batch file (JSONL input when using --column)
   --type, -t <narrative|fhir|note_and_fhir>  Document type to generate (default: fhir)
   --text <value>          Narrative text to process in single mode
-  --file, -f <path>       File containing batch narratives
+  --file, -f <path>       JSONL file for batch processing
+  --column <key>          JSON key containing the clinical text for batch mode
   --output, -o <dir>      Directory for job/batch folders (default: $KILN_DATA_DIR or ./kiln-data)
+  --result-dir <dir>      Directory for consolidated batch outputs (default: ./output)
+  --result-file <file>    Override output JSONL filename (default matches input)
   --llm-url <url>         Override PUBLIC_KILN_LLM_URL for this run (also sets KILN_BASE_URL if unset)
   --model <id>            Override PUBLIC_KILN_MODEL / KILN_MODEL
   --api-key <value>       Use API key for this run (overrides KILN_API_KEY env)
@@ -763,16 +785,67 @@ async function readMultiline(rl: readline.Interface, prompt: string): Promise<st
   return lines.join('\n').trim();
 }
 
-async function readBatchFile(path: string): Promise<string[]> {
+interface BatchInputItem {
+  record: Record<string, any>;
+  text: string;
+  lineNumber: number;
+}
+
+async function readBatchFile(path: string, column: string): Promise<BatchInputItem[]> {
   const raw = await fs.readFile(path, 'utf8');
-  const entries = raw
-    .split(/\n\s*---+\s*\n/g)
-    .map((chunk) => chunk.trim())
-    .filter((chunk) => chunk.length > 0);
-  if (!entries.length) {
-    throw new Error('Batch file does not contain any narratives (use --- as a separator).');
+  const lines = raw.split(/\r?\n/);
+  const records: BatchInputItem[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const lineNumber = i + 1;
+    const trimmed = lines[i].trim();
+    if (!trimmed) continue;
+    let parsed: Record<string, any>;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch (err) {
+      throw new Error(`Invalid JSON on line ${lineNumber}: ${(err as Error).message}`);
+    }
+    if (!(column in parsed)) {
+      throw new Error(`Missing key '${column}' on line ${lineNumber}.`);
+    }
+    const value = parsed[column];
+    if (typeof value !== 'string') {
+      throw new Error(`Expected key '${column}' to be a string on line ${lineNumber}.`);
+    }
+    const narrative = value.trim();
+    if (!narrative) {
+      throw new Error(`Key '${column}' is empty on line ${lineNumber}.`);
+    }
+    records.push({ record: parsed, text: narrative, lineNumber });
   }
-  return entries;
+  if (!records.length) {
+    throw new Error('Batch file does not contain any entries.');
+  }
+  return records;
+}
+
+function extractFinalOutputs(run: RunResult): { narrative?: string; fhir?: any } {
+  const finals = Array.isArray(run.final) ? run.final : [];
+  const findArtifact = (kinds: string[]): Artifact | undefined => {
+    for (let i = finals.length - 1; i >= 0; i--) {
+      const current = finals[i]?.artifact;
+      if (current && kinds.includes(String(current.kind))) return current;
+    }
+    return undefined;
+  };
+  const narrativeArtifact = findArtifact(['ReleaseCandidate', 'FinalNote', 'NarrativeFinal', 'NarrativeRelease']);
+  const fhirArtifact = findArtifact(['FhirBundle']);
+  const outputs: { narrative?: string; fhir?: any } = {};
+  if (narrativeArtifact?.content != null) outputs.narrative = narrativeArtifact.content;
+  if (fhirArtifact?.content != null) {
+    const raw = fhirArtifact.content;
+    try {
+      outputs.fhir = JSON.parse(raw);
+    } catch {
+      outputs.fhir = raw;
+    }
+  }
+  return outputs;
 }
 
 async function runJob(
@@ -931,6 +1004,9 @@ async function main(): Promise<void> {
     if (args.mode === 'batch' && !args.file) {
       args.file = (await rl.question('Enter the path to the batch file: ')).trim();
     }
+    if (args.mode === 'batch' && !args.column) {
+      args.column = (await rl.question('Enter the JSON key that contains the clinical text: ')).trim();
+    }
   } finally {
     rl.close();
   }
@@ -975,6 +1051,10 @@ async function main(): Promise<void> {
     process.env.PUBLIC_KILN_API_KEY = args.apiKey;
   }
 
+  if (args.column) {
+    args.column = args.column.trim();
+  }
+
   await fs.mkdir(dataRoot, { recursive: true });
   await fs.mkdir(join(dataRoot, 'jobs'), { recursive: true });
   await fs.mkdir(join(dataRoot, 'batches'), { recursive: true });
@@ -1001,14 +1081,20 @@ async function main(): Promise<void> {
   try {
     if (args.mode === 'batch') {
       if (!args.file) throw new Error('Batch mode requires a --file path.');
-      const narratives = await readBatchFile(args.file);
-      console.log(`Processing ${narratives.length} narratives from ${args.file}...`);
+      if (!args.column) throw new Error('Batch mode requires a --column value to identify the JSON key.');
+      const entries = await readBatchFile(args.file, args.column);
+      console.log(`Processing ${entries.length} entries from ${args.file} (column '${args.column}')...`);
+
+      const resultDir = resolve(process.cwd(), args.resultDir || 'output');
+      await fs.mkdir(resultDir, { recursive: true });
+      const outputFileName = args.resultFile || basename(args.file);
+      const outputPath = join(resultDir, outputFileName);
 
       const batchId = `batch_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
       const batchRoot = join(dataRoot, 'batches', batchId);
       await fs.mkdir(batchRoot, { recursive: true });
 
-      const batchContext = { ...cliBase, batchId, sourceFile: args.file };
+      const batchContext = { ...cliBase, batchId, sourceFile: args.file, textKey: args.column, resultFile: outputPath };
 
       const layoutBuilder = (jobId: ID): ExportLayout => {
         const jobFolder = safeSegment(jobId);
@@ -1032,36 +1118,69 @@ async function main(): Promise<void> {
         };
       };
 
-      const jobPromises = narratives.map((raw, index) => {
+      const jobPromises = entries.map((entry, index) => {
         const itemNumber = index + 1;
-        const label = `${safeSegment(raw.slice(0, 40) || `item-${itemNumber}`)} (${itemNumber}/${narratives.length})`;
-        return (async (): Promise<{ result?: RunResult; error?: any; label: string }> => {
+        const preview = entry.text.slice(0, 40) || `item-${itemNumber}`;
+        const label = `${safeSegment(preview)} (${itemNumber}/${entries.length})`;
+        return (async (): Promise<{ result?: RunResult; error?: any; label: string; index: number }> => {
           try {
-            const result = await runJob(stores, args.type || 'fhir', raw, label, {
+            const result = await runJob(stores, args.type || 'fhir', entry.text, label, {
               buildLayout: layoutBuilder,
               saveIntermediate,
               config: cfg,
-              cliContext: { ...batchContext, itemIndex: itemNumber },
+              cliContext: { ...batchContext, itemIndex: itemNumber, lineNumber: entry.lineNumber },
               valMaxIters: args.valMaxIters ?? null,
             });
             logJobSummary(result, saveIntermediate);
-            return { result, label };
+            return { result, label, index };
           } catch (err: any) {
             console.error(`❌ Failed to process batch item ${itemNumber}: ${err?.message || err}`);
-            return { error: err, label };
+            return { error: err, label, index };
           }
         })();
       });
 
       const results = await Promise.all(jobPromises);
 
+      const includeNarrative = (args.type || 'fhir') === 'narrative' || (args.type || 'fhir') === 'note_and_fhir';
+      const includeFhir = (args.type || 'fhir') === 'fhir' || (args.type || 'fhir') === 'note_and_fhir';
+
+      const consolidated = entries.map((entry, idx) => {
+        const baseRecord = { ...entry.record };
+        const outcome = results[idx];
+        if (outcome?.result) {
+          const outputs = extractFinalOutputs(outcome.result);
+          baseRecord[BATCH_OUTPUT_COLUMNS.status] = outcome.result.status;
+          if (includeNarrative && outputs.narrative != null) {
+            baseRecord[BATCH_OUTPUT_COLUMNS.narrative] = outputs.narrative;
+          }
+          if (includeFhir && outputs.fhir != null) {
+            baseRecord[BATCH_OUTPUT_COLUMNS.fhir] = outputs.fhir;
+          }
+          if (outcome.result.lastError) {
+            baseRecord[BATCH_OUTPUT_COLUMNS.error] = outcome.result.lastError;
+          }
+        } else {
+          const err = outcome?.error;
+          baseRecord[BATCH_OUTPUT_COLUMNS.status] = 'error';
+          baseRecord[BATCH_OUTPUT_COLUMNS.error] = String(err?.message || err || 'Unknown error');
+        }
+        return baseRecord;
+      });
+
+      const serialized = consolidated.map((row) => JSON.stringify(row));
+      await fs.writeFile(outputPath, serialized.join('\n') + '\n', 'utf8');
+      console.log(`Batch results written to ${outputPath}`);
+
       const toBatchRelative = (absPath: string) => relative(batchRoot, absPath).replace(/\\/g, '/');
+      const resultRelative = relative(process.cwd(), outputPath).replace(/\\/g, '/');
 
       const batchMetadata = {
         batchId,
         createdAt: new Date().toISOString(),
         sourceFile: args.file,
-        narrativeCount: narratives.length,
+        textKey: args.column,
+        narrativeCount: entries.length,
         config: {
           baseURL: cfg.baseURL,
           model: cfg.model,
@@ -1069,12 +1188,14 @@ async function main(): Promise<void> {
           llmMaxConcurrency: cfg.llmMaxConcurrency,
         },
         cli: batchContext,
+        resultFile: resultRelative,
         jobs: results.map((entry, idx) => {
           if (entry.result) {
             const res = entry.result;
             return {
               index: idx + 1,
               jobId: res.jobId,
+              lineNumber: entries[idx]?.lineNumber,
               title: res.title,
               status: res.metadata.status,
               lastError: res.metadata.lastError,
@@ -1088,6 +1209,7 @@ async function main(): Promise<void> {
             label: entry.label,
             status: 'error',
             error: String(entry.error?.message || entry.error || 'Unknown error'),
+            lineNumber: entries[idx]?.lineNumber,
           };
         }),
       };
