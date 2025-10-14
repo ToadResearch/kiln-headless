@@ -187,10 +187,8 @@ const KEYWORD_PHASES: Array<{ phase: PhaseId; keywords: string[] }> = [
 ];
 
 const BATCH_OUTPUT_COLUMNS = {
-  narrative: 'Kiln Narrative',
-  fhir: 'Kiln FHIR',
-  status: 'Kiln Status',
-  error: 'Kiln Error',
+  note: 'EHR Note',
+  fhir: 'EHR FHIR',
 } as const;
 
 function classifyArtifact(artifact: Artifact): ArtifactClass {
@@ -1165,20 +1163,12 @@ async function main(): Promise<void> {
         const outcome = results[idx];
         if (outcome?.result) {
           const outputs = extractFinalOutputs(outcome.result);
-          baseRecord[BATCH_OUTPUT_COLUMNS.status] = outcome.result.status;
           if (includeNarrative && outputs.narrative != null) {
-            baseRecord[BATCH_OUTPUT_COLUMNS.narrative] = outputs.narrative;
+            baseRecord[BATCH_OUTPUT_COLUMNS.note] = outputs.narrative;
           }
           if (includeFhir && outputs.fhir != null) {
             baseRecord[BATCH_OUTPUT_COLUMNS.fhir] = outputs.fhir;
           }
-          if (outcome.result.lastError) {
-            baseRecord[BATCH_OUTPUT_COLUMNS.error] = outcome.result.lastError;
-          }
-        } else {
-          const err = outcome?.error;
-          baseRecord[BATCH_OUTPUT_COLUMNS.status] = 'error';
-          baseRecord[BATCH_OUTPUT_COLUMNS.error] = String(err?.message || err || 'Unknown error');
         }
         return baseRecord;
       });
