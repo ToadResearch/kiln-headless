@@ -658,7 +658,20 @@ function parseArgs(argv: string[]): ParsedArgs {
         break;
       case '--type':
       case '-t':
-        parsed.type = (argv[++i]?.toLowerCase() as 'fhir' | 'narrative' | 'note_and_fhir') || undefined;
+        {
+          const raw = argv[++i]?.toLowerCase();
+          if (!raw) {
+            parsed.type = undefined;
+            break;
+          }
+          if (raw === 'note' || raw === 'narrative') {
+            parsed.type = 'narrative';
+          } else if (raw === 'fhir' || raw === 'note_and_fhir') {
+            parsed.type = raw as 'fhir' | 'note_and_fhir';
+          } else {
+            throw new Error(`Unknown --type value: ${raw}`);
+          }
+        }
         break;
       case '--text':
         parsed.text = argv[++i];
@@ -754,7 +767,7 @@ Usage:
 Options:
   --single, -s            Process a single narrative (default when not specified)
   --batch, -b             Process a batch file (JSONL input when using --column)
-  --type, -t <narrative|fhir|note_and_fhir>  Document type to generate (default: fhir)
+  --type, -t <note|fhir|note_and_fhir>  Document type to generate (default: fhir)
   --text <value>          Narrative text to process in single mode
   --file, -f <path>       JSONL file for batch processing
   --column <key>          JSON key containing the clinical text for batch mode
@@ -995,7 +1008,9 @@ async function main(): Promise<void> {
       args.mode = answer === '2' ? 'batch' : 'single';
     }
     if (!args.type) {
-      const answer = (await rl.question('Generate which document type? ([1] fhir, [2] narrative, [3] note_and_fhir): ')).trim();
+      const answer = (await rl
+        .question('Generate which document type? ([1] fhir, [2] note, [3] note_and_fhir): '))
+        .trim();
       args.type = answer === '2' ? 'narrative' : answer === '3' ? 'note_and_fhir' : 'fhir';
     }
     if (args.mode === 'single' && !args.text) {

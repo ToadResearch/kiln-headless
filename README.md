@@ -45,7 +45,7 @@ bun test
 ```sh
 bun run headless --single \
   --text "Mr. Grok Four is 42 years old and has the flu" \
-  --type note_and_fhir \
+  --type note \
   --llm-url https://openrouter.ai/api/v1 \
   --model x-ai/grok-4-fast:free \
   --val-max-iters 30 \
@@ -54,7 +54,7 @@ bun run headless --single \
 
 bun run headless --batch \
   --file example-batch/sample.jsonl \
-  --column "context" \
+  --column "Patient Note" \
   --type note_and_fhir \
   --model x-ai/grok-4-fast:free \
   --val-max-iters 30 \
@@ -66,7 +66,7 @@ bun run headless --batch \
   | Flag | Description | Default |
   | --- | --- | --- |
   | `--single` / `--batch` | Process one narrative or a JSONL batch (`--column` required) | `--single` |
-  | `--type` | Document type (`narrative`, `fhir`, or `note_and_fhir`) | `fhir` |
+  | `--type` | Document type (`note`, `fhir`, or `note_and_fhir`) | `fhir` |
   | `--text` | Narrative text (prompts interactively if omitted) | none |
   | `--file` | Batch JSONL input file path | none |
   | `--column` | JSON key containing the clinical text for batch rows | none |
@@ -320,7 +320,7 @@ For local development, use Bun's built-in hot reload to iterate quickly. The ser
   | Flag | Description | Default |
   | --- | --- | --- |
   | `--single` / `--batch` | Process one narrative or a batch file (`---` separators) | `--single` |
-  | `--type` | Document type (`narrative`, `fhir`, or `note_and_fhir`) | `fhir` |
+  | `--type` | Document type (`note`, `fhir`, or `note_and_fhir`) | `fhir` |
   | `--text` | Narrative text (prompts interactively if omitted) | none |
   | `--file` | Batch input file path | none |
   | `--output`, `-o` | Data root containing job/batch folders | `$KILN_DATA_DIR` or `./kiln-data` |
