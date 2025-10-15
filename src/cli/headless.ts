@@ -1045,10 +1045,16 @@ async function main(): Promise<void> {
   if (args.llmUrl) {
     process.env.PUBLIC_KILN_LLM_URL = args.llmUrl;
     if (!process.env.KILN_BASE_URL) process.env.KILN_BASE_URL = args.llmUrl;
+    try {
+      localStorage.setItem('OVERRIDE_BASE_URL', args.llmUrl);
+    } catch {}
   }
   if (args.model) {
     process.env.PUBLIC_KILN_MODEL = args.model;
     process.env.KILN_MODEL = args.model;
+    try {
+      localStorage.setItem('OVERRIDE_MODEL', args.model);
+    } catch {}
   }
   if (typeof args.temperature === 'number') {
     const t = String(args.temperature);
