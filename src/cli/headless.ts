@@ -1066,14 +1066,18 @@ async function main(): Promise<void> {
     process.env.KILN_LLM_MAX_CONCURRENCY = v;
   }
   if (args.noApiKey) {
+    process.env.KILN_FORCE_NO_API_KEY = 'true';
     delete process.env.KILN_API_KEY;
     delete process.env.PUBLIC_KILN_API_KEY;
     try {
       localStorage.removeItem('TASK_DEFAULT_API_KEY');
     } catch {}
   } else if (args.apiKey) {
+    delete process.env.KILN_FORCE_NO_API_KEY;
     process.env.KILN_API_KEY = args.apiKey;
     process.env.PUBLIC_KILN_API_KEY = args.apiKey;
+  } else {
+    delete process.env.KILN_FORCE_NO_API_KEY;
   }
 
   if (args.column) {

@@ -453,7 +453,8 @@ async function llmCall(
   status?: number;
 }> {
   const cfg = resolveTaskConfig(task);
-  const apiKey = cfg.apiKey?.trim() || '';
+  const skipAuth = process.env.KILN_FORCE_NO_API_KEY === 'true';
+  const apiKey = skipAuth ? '' : cfg.apiKey?.trim() || '';
   const retries = ((): number => {
     try {
       return appConfig.isReady() ? appConfig.maxRetries() : 3;
