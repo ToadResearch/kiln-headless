@@ -632,6 +632,7 @@ interface ParsedArgs {
   model?: string;
   temperature?: number;
   apiKey?: string;
+  noApiKey?: boolean;
   finalOnly?: boolean;
   fhirConcurrency?: number;
   llmMaxConcurrency?: number;
@@ -700,6 +701,10 @@ function parseArgs(argv: string[]): ParsedArgs {
         break;
       case '--api-key':
         parsed.apiKey = argv[++i];
+        break;
+      case '--no-api-key':
+        parsed.apiKey = '';
+        parsed.noApiKey = true;
         break;
       case '--temperature':
       case '--temp':
@@ -775,6 +780,7 @@ Options:
   --llm-url <url>         Override PUBLIC_KILN_LLM_URL for this run (also sets KILN_BASE_URL if unset)
   --model <id>            Override PUBLIC_KILN_MODEL / KILN_MODEL
   --api-key <value>       Use API key for this run (overrides KILN_API_KEY env)
+  --no-api-key            Disable API key usage for this run (clears overrides)
   --temperature <value>   Override PUBLIC_KILN_TEMPERATURE / KILN_TEMPERATURE
   --fhir-concurrency <n>  Override PUBLIC_KILN_FHIR_GEN_CONCURRENCY / KILN_FHIR_CONCURRENCY
   --llm-max-concurrency <n> Override PUBLIC_KILN_LLM_MAX_CONCURRENCY / KILN_LLM_MAX_CONCURRENCY
@@ -1059,7 +1065,13 @@ async function main(): Promise<void> {
     process.env.PUBLIC_KILN_LLM_MAX_CONCURRENCY = v;
     process.env.KILN_LLM_MAX_CONCURRENCY = v;
   }
-  if (args.apiKey) {
+  if (args.noApiKey) {
+    delete process.env.KILN_API_KEY;
+    delete process.env.PUBLIC_KILN_API_KEY;
+    try {
+      localStorage.removeItem('TASK_DEFAULT_API_KEY');
+    } catch {}
+  } else if (args.apiKey) {
     process.env.KILN_API_KEY = args.apiKey;
     process.env.PUBLIC_KILN_API_KEY = args.apiKey;
   }

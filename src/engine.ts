@@ -453,7 +453,7 @@ async function llmCall(
   status?: number;
 }> {
   const cfg = resolveTaskConfig(task);
-  if (!cfg.apiKey) throw new Error("API key required for LLM; set localStorage 'TASK_DEFAULT_API_KEY'");
+  const apiKey = cfg.apiKey?.trim() || '';
   const retries = ((): number => {
     try {
       return appConfig.isReady() ? appConfig.maxRetries() : 3;
@@ -478,12 +478,15 @@ async function llmCall(
         attempt,
         expect,
         temperature: temperature ?? cfg.temperature,
+        auth: apiKey ? 'bearer' : 'none',
       });
       let response: Response;
       try {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
         response = await fetch(`${cfg.baseURL}/chat/completions`, {
           method: 'POST',
-          headers: { Authorization: `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({
             model: cfg.model,
             temperature: temperature ?? cfg.temperature ?? 0.2,

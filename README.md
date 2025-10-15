@@ -20,7 +20,7 @@ cd kiln-headless
 bun install
 ```
 
-Create the .env file and add your LLM api key to `KILN_API_KEY`
+Create the .env file. If your LLM endpoint requires authentication, add the key to `KILN_API_KEY`; otherwise you can leave it empty.
 ```sh
 cp .env.example .env
 ```
@@ -49,7 +49,7 @@ bun run headless --single \
   --llm-url https://openrouter.ai/api/v1 \
   --model x-ai/grok-4-fast:free \
   --val-max-iters 30 \
-  -- api-key "$OPENROUTER_API_KEY" \
+  --api-key "$OPENROUTER_API_KEY" \
 
 
 bun run headless --batch \
@@ -58,8 +58,20 @@ bun run headless --batch \
   --type note_and_fhir \
   --model x-ai/grok-4-fast:free \
   --val-max-iters 30 \
-  -- api-key "$OPENROUTER_API_KEY" \
+  --api-key "$OPENROUTER_API_KEY" \
 
+```
+
+For self-hosted runtimes such as vLLM or sglang that do not require authentication, omit `--api-key` or pass `--no-api-key` to clear any stored credentials:
+
+```sh
+bun run headless --single \
+  --text "Mr. Grok Four is 42 years old and has the flu" \
+  --type note \
+  --llm-url http://localhost:3001 \
+  --model mistral \
+  --val-max-iters 30 \
+  --no-api-key
 ```
   Batch mode now expects JSON Lines input: each line in the `.jsonl` file must be a JSON object containing the clinical text under the key passed to `--column`. The CLI writes run artifacts to `./kiln-data` (change with `--output` or `KILN_DATA_DIR`) and saves the post-processed batch file to `./output/<original-name>.jsonl` by default (override with `--result-dir` / `--result-file`). Each job lives under `kiln-data/jobs/<jobId>/` with `metadata.json` plus per-phase folders (`planning/`, `sections/`, `assembly/`, `note_review/`, `finalized/`, `fhir/`, `terminology/`, and `other/`). Batch runs create `kiln-data/batches/<batchId>/jobs/<jobId>/…` alongside consolidated batch metadata. The exported JSONL mirrors the input rows and appends `EHR Note` and/or `EHR FHIR` columns according to the `--type` selected. Override LLM and validation settings at runtime without editing env files.
 
@@ -75,6 +87,8 @@ bun run headless --batch \
   | `--result-file` | Override the default output filename | matches source filename |
   | `--llm-url` | Overrides `PUBLIC_KILN_LLM_URL` / `KILN_BASE_URL` | env config |
   | `--model` | Overrides `PUBLIC_KILN_MODEL` / `KILN_MODEL` | env config |
+  | `--api-key` | Overrides `KILN_API_KEY` / stored defaults | env config |
+  | `--no-api-key` | Clears env/local overrides and skips bearer auth | inherits runtime |
   | `--temperature` | Overrides `PUBLIC_KILN_TEMPERATURE` / `KILN_TEMPERATURE` | env config |
   | `--fhir-concurrency` | Overrides `PUBLIC_KILN_FHIR_GEN_CONCURRENCY` / `KILN_FHIR_CONCURRENCY` | env config (default 1) |
   | `--llm-max-concurrency` | Overrides `PUBLIC_KILN_LLM_MAX_CONCURRENCY` / `KILN_LLM_MAX_CONCURRENCY` | env config (default 4) |
